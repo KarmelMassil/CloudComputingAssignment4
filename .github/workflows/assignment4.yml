@@ -1,0 +1,381 @@
+name: assignment4
+
+on:
+  push:
+
+jobs:
+  # ===========================================================================
+  # JOB 1 – build
+  # Builds the pet-store and pet-order Docker images.
+  # Saves them as artifacts for use by jobs 2 and 3.
+  # Always writes lines 1-3 of log.txt (partial log) as an artifact.
+  # ===========================================================================
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      start_time:       ${{ steps.start_time.outputs.time }}
+      pet_store_status: ${{ steps.ps_status.outputs.msg }}
+      pet_order_status: ${{ steps.po_status.outputs.msg }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Record workflow start time (line 1 of log)
+      # -----------------------------------------------------------------------
+      - name: Record start time
+        id: start_time
+        run: echo "time=$(date -Iminutes)" >> $GITHUB_OUTPUT
+
+      # -----------------------------------------------------------------------
+      # Build pet-store image
+      # -----------------------------------------------------------------------
+      - name: Build pet-store image
+        id: build_ps
+        continue-on-error: true
+        run: docker build -t pet-store:latest ./pet-store
+
+      - name: Set pet-store build status
+        id: ps_status
+        run: |
+          if [ "${{ steps.build_ps.outcome }}" = "success" ]; then
+            echo "msg=image pet-store successfully built;" >> $GITHUB_OUTPUT
+          else
+            echo "msg=image pet-store not able to be built;" >> $GITHUB_OUTPUT
+          fi
+
+      # -----------------------------------------------------------------------
+      # Build pet-order image
+      # -----------------------------------------------------------------------
+      - name: Build pet-order image
+        id: build_po
+        continue-on-error: true
+        run: docker build -t pet-order:latest ./pet-order
+
+      - name: Set pet-order build status
+        id: po_status
+        run: |
+          if [ "${{ steps.build_po.outcome }}" = "success" ]; then
+            echo "msg=image pet-order successfully built;" >> $GITHUB_OUTPUT
+          else
+            echo "msg=image pet-order not able to be built;" >> $GITHUB_OUTPUT
+          fi
+
+      # -----------------------------------------------------------------------
+      # Save images as tars (only if both built successfully)
+      # -----------------------------------------------------------------------
+      - name: Save Docker images
+        if: steps.build_ps.outcome == 'success' && steps.build_po.outcome == 'success'
+        run: |
+          docker save pet-store:latest -o pet-store.tar
+          docker save pet-order:latest -o pet-order.tar
+
+      - name: Upload Docker images artifact
+        if: steps.build_ps.outcome == 'success' && steps.build_po.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-images
+          path: |
+            pet-store.tar
+            pet-order.tar
+
+      # -----------------------------------------------------------------------
+      # Write partial log (lines 1-3) — always, even on build failure
+      # -----------------------------------------------------------------------
+      - name: Write partial log (lines 1-3)
+        if: always()
+        run: |
+          echo "${{ steps.start_time.outputs.time }}" > partial_log.txt
+          echo "Karmel Massil"                         >> partial_log.txt
+          echo "${{ steps.ps_status.outputs.msg }} ${{ steps.po_status.outputs.msg }}" >> partial_log.txt
+
+      - name: Upload partial log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: partial-log
+          path: partial_log.txt
+
+      # -----------------------------------------------------------------------
+      # Fail the job if either image could not be built
+      # (prevents jobs 2 and 3 from running)
+      # -----------------------------------------------------------------------
+      - name: Fail if any build failed
+        if: steps.build_ps.outcome != 'success' || steps.build_po.outcome != 'success'
+        run: |
+          echo "One or more images failed to build."
+          exit 1
+
+  # ===========================================================================
+  # JOB 2 – test
+  # Loads images, starts the application, runs pytest.
+  # Writes the complete log.txt (lines 1-5) and uploads test results.
+  # ===========================================================================
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Load images from job 1
+      # -----------------------------------------------------------------------
+      - name: Download Docker images artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+
+      - name: Load Docker images
+        run: |
+          docker load -i pet-store.tar
+          docker load -i pet-order.tar
+
+      # -----------------------------------------------------------------------
+      # Start the application
+      # -----------------------------------------------------------------------
+      - name: Start application with Docker Compose
+        env:
+          NINJA_API_KEY: ${{ secrets.NINJA_API_KEY }}
+        run: docker compose up -d
+
+      # -----------------------------------------------------------------------
+      # Wait for all three services to be ready
+      # -----------------------------------------------------------------------
+      - name: Wait for pet-store1 (port 5001)
+        id: wait_ps1
+        continue-on-error: true
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5001/pet-types > /dev/null 2>&1; then
+              echo "pet-store1 is ready"
+              exit 0
+            fi
+            echo "Waiting for pet-store1 ($i/30)..."
+            sleep 5
+          done
+          echo "pet-store1 did not become ready"
+          exit 1
+
+      - name: Wait for pet-store2 (port 5002)
+        id: wait_ps2
+        continue-on-error: true
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5002/pet-types > /dev/null 2>&1; then
+              echo "pet-store2 is ready"
+              exit 0
+            fi
+            echo "Waiting for pet-store2 ($i/30)..."
+            sleep 5
+          done
+          echo "pet-store2 did not become ready"
+          exit 1
+
+      - name: Wait for pet-order (port 5003)
+        id: wait_po
+        continue-on-error: true
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5003/transactions \
+                -H "OwnerPC: LovesPetsL2M3n4" > /dev/null 2>&1; then
+              echo "pet-order is ready"
+              exit 0
+            fi
+            echo "Waiting for pet-order ($i/30)..."
+            sleep 5
+          done
+          echo "pet-order did not become ready"
+          exit 1
+
+      # -----------------------------------------------------------------------
+      # Record container start status (line 4 of log)
+      # -----------------------------------------------------------------------
+      - name: Check container status
+        id: container_status
+        if: always()
+        run: |
+          get_status() {
+            local name=$1
+            local label=$2
+            local running
+            running=$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || echo "false")
+            if [ "$running" = "true" ]; then
+              echo "Container $label up and running;"
+            else
+              echo "Container $label failed to run;"
+            fi
+          }
+
+          ps1=$(get_status pet-store1  "pet-store #1")
+          ps2=$(get_status pet-store2  "pet-store #2")
+          po=$(get_status  pet-order   "pet-order")
+
+          echo "line=$ps1 $ps2 $po" >> $GITHUB_OUTPUT
+
+      # -----------------------------------------------------------------------
+      # Install Python test dependencies and run pytest
+      # -----------------------------------------------------------------------
+      - name: Install Python dependencies
+        run: pip install pytest requests
+
+      - name: Run pytest
+        id: pytest_run
+        continue-on-error: true
+        run: |
+          cd tests
+          pytest -v assn4_tests.py 2>&1 | tee assn4_test_results.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Set pytest status
+        id: pytest_status
+        if: always()
+        run: |
+          if [ "${{ steps.pytest_run.outcome }}" = "success" ]; then
+            echo "msg=All pytests succeeded" >> $GITHUB_OUTPUT
+          else
+            echo "msg=pytests failed" >> $GITHUB_OUTPUT
+          fi
+
+      # -----------------------------------------------------------------------
+      # Upload test results artifact (always, even on failure)
+      # -----------------------------------------------------------------------
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: tests/assn4_test_results.txt
+
+      # -----------------------------------------------------------------------
+      # Complete log.txt (all 5 lines) and upload
+      # -----------------------------------------------------------------------
+      - name: Download partial log from job 1
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: partial-log
+
+      - name: Complete and upload log.txt
+        if: always()
+        run: |
+          cp partial_log.txt log.txt
+          echo "${{ steps.container_status.outputs.line }}" >> log.txt
+          echo "${{ steps.pytest_status.outputs.msg }}"     >> log.txt
+
+      - name: Upload log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: log
+          path: log.txt
+
+      # -----------------------------------------------------------------------
+      # Fail the job if pytest failed
+      # (prevents job 3 from running)
+      # -----------------------------------------------------------------------
+      - name: Fail if pytest failed
+        if: steps.pytest_run.outcome != 'success'
+        run: |
+          echo "Pytest tests failed."
+          exit 1
+
+  # ===========================================================================
+  # JOB 3 – query
+  # Loads images, starts a fresh application, populates data,
+  # reads query.txt and writes response.txt.
+  # ===========================================================================
+  query:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Load images from job 1
+      # -----------------------------------------------------------------------
+      - name: Download Docker images artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+
+      - name: Load Docker images
+        run: |
+          docker load -i pet-store.tar
+          docker load -i pet-order.tar
+
+      # -----------------------------------------------------------------------
+      # Start a fresh application
+      # -----------------------------------------------------------------------
+      - name: Start application with Docker Compose
+        env:
+          NINJA_API_KEY: ${{ secrets.NINJA_API_KEY }}
+        run: docker compose up -d
+
+      # -----------------------------------------------------------------------
+      # Wait for services
+      # -----------------------------------------------------------------------
+      - name: Wait for pet-store1 (port 5001)
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5001/pet-types > /dev/null 2>&1; then
+              echo "pet-store1 is ready"
+              exit 0
+            fi
+            echo "Waiting for pet-store1 ($i/30)..."
+            sleep 5
+          done
+          echo "pet-store1 did not become ready"
+          exit 1
+
+      - name: Wait for pet-store2 (port 5002)
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5002/pet-types > /dev/null 2>&1; then
+              echo "pet-store2 is ready"
+              exit 0
+            fi
+            echo "Waiting for pet-store2 ($i/30)..."
+            sleep 5
+          done
+          echo "pet-store2 did not become ready"
+          exit 1
+
+      - name: Wait for pet-order (port 5003)
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5003/transactions \
+                -H "OwnerPC: LovesPetsL2M3n4" > /dev/null 2>&1; then
+              echo "pet-order is ready"
+              exit 0
+            fi
+            echo "Waiting for pet-order ($i/30)..."
+            sleep 5
+          done
+          echo "pet-order did not become ready"
+          exit 1
+
+      # -----------------------------------------------------------------------
+      # Install Python dependencies
+      # -----------------------------------------------------------------------
+      - name: Install Python dependencies
+        run: pip install requests
+
+      # -----------------------------------------------------------------------
+      # Populate data and process query.txt → response.txt
+      # -----------------------------------------------------------------------
+      - name: Run query job
+        run: python query/run_query.py
+
+      # -----------------------------------------------------------------------
+      # Upload response.txt
+      # -----------------------------------------------------------------------
+      - name: Upload response artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: query-responses
+          path: response.txt

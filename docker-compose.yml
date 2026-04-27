@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+
+  mongodb-petstore:
+    image: mongo:6
+    container_name: mongodb-petstore
+    expose:
+      - "27017"
+    networks:
+      - app-network
+
+  mongodb-petorder:
+    image: mongo:6
+    container_name: mongodb-petorder
+    expose:
+      - "27017"
+    networks:
+      - app-network
+
+  pet-store1:
+    image: pet-store:latest
+    pull_policy: never
+    container_name: pet-store1
+    environment:
+      - NINJA_API_KEY=2UuM1WijHcc9AhjfbHxBSDSkDYLZbGMgKOMpu1cE
+      - MONGO_URL=mongodb://mongodb-petstore:27017
+      - STORE_COLLECTION=petstore1
+    ports:
+      - "5001:8000"
+    depends_on:
+      - mongodb-petstore
+    networks:
+      - app-network
+
+  pet-store2:
+    image: pet-store:latest
+    pull_policy: never
+    container_name: pet-store2
+    environment:
+      - NINJA_API_KEY=2UuM1WijHcc9AhjfbHxBSDSkDYLZbGMgKOMpu1cE
+      - MONGO_URL=mongodb://mongodb-petstore:27017
+      - STORE_COLLECTION=petstore2
+    ports:
+      - "5002:8000"
+    depends_on:
+      - mongodb-petstore
+    networks:
+      - app-network
+
+  pet-order:
+    image: pet-order:latest
+    pull_policy: never
+    container_name: pet-order
+    environment:
+      - MONGO_URL=mongodb://mongodb-petorder:27017
+      - PETSTORE1_URL=http://pet-store1:8000
+      - PETSTORE2_URL=http://pet-store2:8000
+    ports:
+      - "5003:8080"
+    depends_on:
+      - mongodb-petorder
+      - pet-store1
+      - pet-store2
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
