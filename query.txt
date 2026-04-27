@@ -1,6 +1,0 @@
-query: 1,type=Golden Retriever;
-query: 2,family=Canidae;
-query: 1,genus=Felis;
-purchase: {"purchaser": "John Jones", "pet-type": "Golden Retriever"};
-purchase: {"purchaser": "Alice Smith", "pet-type": "bulldog", "store": 2};
-purchase: {"purchaser": "Bob Lee", "pet-type": "Dragon"};
