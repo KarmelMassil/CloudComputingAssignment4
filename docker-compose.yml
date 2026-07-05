@@ -23,7 +23,7 @@ services:
     pull_policy: never
     container_name: pet-store1
     environment:
-      - NINJA_API_KEY=2UuM1WijHcc9AhjfbHxBSDSkDYLZbGMgKOMpu1cE
+      - NINJA_API_KEY=API_KEY
       - MONGO_URL=mongodb://mongodb-petstore:27017
       - STORE_COLLECTION=petstore1
     ports:
@@ -38,7 +38,7 @@ services:
     pull_policy: never
     container_name: pet-store2
     environment:
-      - NINJA_API_KEY=2UuM1WijHcc9AhjfbHxBSDSkDYLZbGMgKOMpu1cE
+      - NINJA_API_KEY=API_KEY
       - MONGO_URL=mongodb://mongodb-petstore:27017
       - STORE_COLLECTION=petstore2
     ports:
